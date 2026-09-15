@@ -6,6 +6,7 @@ export 'glass_card.dart';
 export 'glass_dialog.dart';       // GlassDialog, GlassTextField, GlassButton
 export 'aura_orb.dart';
 export 'aura_wave_form.dart';
+export 'holographic_globe.dart';
 export 'floating_nav_bar.dart';
 export 'wireframe_background.dart';
 

@@ -41,6 +41,10 @@ class AuraWaveForm extends StatefulWidget {
     this.maxBarHeight = 80.0,
     this.minBarHeight = 4.0,
     this.showPill = true,
+    this.fullBleed = false,
+    this.centerGap = 0.0,
+    this.occlusionRadius = 0.0,
+    this.occlusionFeather = 28.0,
   });
 
   /// Current wave state.
@@ -49,7 +53,8 @@ class AuraWaveForm extends StatefulWidget {
   /// Number of vertical bars.
   final int barCount;
 
-  /// Width of each bar in logical pixels.
+  /// Width of each bar in logical pixels. Ignored when [fullBleed] is true
+  /// (bar width is derived from available width instead).
   final double barWidth;
 
   /// Gap between bars.
@@ -61,8 +66,34 @@ class AuraWaveForm extends StatefulWidget {
   /// Minimum bar height.
   final double minBarHeight;
 
-  /// Whether to show the translucent pill container.
+  /// Whether to show the translucent pill container. Forced off when
+  /// [fullBleed] is true — a full-bleed waveform is meant to float
+  /// directly on the AMOLED background with no card behind it.
   final bool showPill;
+
+  /// When true, the waveform stretches to fill the available width
+  /// (via LayoutBuilder) instead of sizing itself to a fixed pill.
+  /// Used for the Home-screen composition where the waveform surrounds
+  /// the central holographic globe.
+  final bool fullBleed;
+
+  /// 0.0–1.0. When > 0, bar amplitude is tapered down toward the
+  /// horizontal center of the waveform, leaving visual room for the
+  /// globe to sit "inside" the wave rather than beside it. 0 (default)
+  /// preserves the original uniform-amplitude pill behavior exactly.
+  final double centerGap;
+
+  /// Radius (logical pixels) of the object the waveform should appear
+  /// to pass behind, measured from the painter's horizontal center.
+  /// Pass the actual globe radius here (not an arbitrary constant) so
+  /// the occlusion always matches what's really on screen. 0 disables
+  /// occlusion entirely (default — no visual change for existing users).
+  final double occlusionRadius;
+
+  /// Width (logical pixels) of the soft fade zone at the occlusion
+  /// boundary. Larger = softer/smoother disappearance, avoiding a
+  /// hard edge where bars meet the globe.
+  final double occlusionFeather;
 
   @override
   State<AuraWaveForm> createState() => _AuraWaveFormState();
@@ -249,24 +280,85 @@ class _AuraWaveFormState extends State<AuraWaveForm>
           return height.clamp(widget.minBarHeight, widget.maxBarHeight);
         });
 
-        // Total width of wave form
-        final totalWidth =
-            widget.barCount * widget.barWidth +
-                (widget.barCount - 1) * widget.barGap;
+        // Apply center-taper envelope (no-op when centerGap == 0, which
+        // keeps the original pill usage visually byte-for-byte identical).
+        final envelopedHeights = widget.centerGap <= 0
+            ? animatedHeights
+            : List<double>.generate(widget.barCount, (i) {
+                final f = widget.barCount <= 1
+                    ? 0.0
+                    : i / (widget.barCount - 1);
+                final distFromCenter = (f - 0.5).abs() * 2; // 0 center .. 1 edge
+                final envelope = 0.12 +
+                    0.88 * pow(distFromCenter, 1.6).toDouble();
+                final h = widget.minBarHeight +
+                    (animatedHeights[i] - widget.minBarHeight) * envelope;
+                return h.clamp(widget.minBarHeight, widget.maxBarHeight);
+              });
 
-        // Build the bar row
-        final waveForm = CustomPaint(
-          painter: _WaveFormPainter(
-            barHeights: animatedHeights,
-            barWidth: widget.barWidth,
-            barGap: widget.barGap,
-            barColor: barColor,
-            barDimColor: barDimColor,
-            glowColor: barColor.withOpacity(glowOpacity),
-            maxBarHeight: widget.maxBarHeight,
-          ),
-          size: Size(totalWidth, widget.maxBarHeight),
-        );
+        Widget waveForm;
+        if (widget.fullBleed) {
+          // Stretch to all available width; bar width derives from it so
+          // the wave reaches both edges of the Home screen.
+          waveForm = LayoutBuilder(
+            builder: (context, constraints) {
+              final availableWidth = constraints.maxWidth.isFinite
+                  ? constraints.maxWidth
+                  : widget.barCount * (widget.barWidth + widget.barGap);
+              final derivedBarWidth = ((availableWidth -
+                          (widget.barCount - 1) * widget.barGap) /
+                      widget.barCount)
+                  .clamp(1.0, double.infinity);
+              return CustomPaint(
+                painter: _WaveFormPainter(
+                  barHeights: envelopedHeights,
+                  barWidth: derivedBarWidth,
+                  barGap: widget.barGap,
+                  barColor: barColor,
+                  barDimColor: barDimColor,
+                  glowColor: barColor.withOpacity(glowOpacity),
+                  maxBarHeight: widget.maxBarHeight,
+                  // Occlusion center is the actual midpoint of whatever
+                  // width we were given — same center the globe is
+                  // aligned to in the Stack — so this never relies on a
+                  // fixed screen coordinate.
+                  occlusionCenterX: availableWidth / 2,
+                  occlusionRadius: widget.occlusionRadius,
+                  occlusionFeather: widget.occlusionFeather,
+                ),
+                size: Size(availableWidth, widget.maxBarHeight),
+              );
+            },
+          );
+        } else {
+          // Total width of wave form (original fixed-size pill behavior)
+          final totalWidth =
+              widget.barCount * widget.barWidth +
+                  (widget.barCount - 1) * widget.barGap;
+
+          waveForm = CustomPaint(
+            painter: _WaveFormPainter(
+              barHeights: envelopedHeights,
+              barWidth: widget.barWidth,
+              barGap: widget.barGap,
+              barColor: barColor,
+              barDimColor: barDimColor,
+              glowColor: barColor.withOpacity(glowOpacity),
+              maxBarHeight: widget.maxBarHeight,
+              occlusionCenterX: totalWidth / 2,
+              occlusionRadius: widget.occlusionRadius,
+              occlusionFeather: widget.occlusionFeather,
+            ),
+            size: Size(totalWidth, widget.maxBarHeight),
+          );
+        }
+
+        // Full-bleed mode floats directly on AMOLED black with no card
+        // and no label — it's meant to read as one visualization with
+        // the globe, not as a standalone labeled component.
+        if (widget.fullBleed) {
+          return waveForm;
+        }
 
         // Center content: state label + wave form
         final content = Column(
@@ -343,6 +435,9 @@ class _WaveFormPainter extends CustomPainter {
     required this.barDimColor,
     required this.glowColor,
     required this.maxBarHeight,
+    this.occlusionCenterX = 0,
+    this.occlusionRadius = 0,
+    this.occlusionFeather = 28,
   });
 
   final List<double> barHeights;
@@ -353,6 +448,16 @@ class _WaveFormPainter extends CustomPainter {
   final Color glowColor;
   final double maxBarHeight;
 
+  /// Horizontal center (in the same coordinate space as the painted
+  /// bars) of the object the waveform should appear to pass behind.
+  final double occlusionCenterX;
+
+  /// Radius of that object. 0 disables occlusion.
+  final double occlusionRadius;
+
+  /// Soft fade width at the occlusion boundary.
+  final double occlusionFeather;
+
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..style = PaintingStyle.fill;
@@ -360,13 +465,25 @@ class _WaveFormPainter extends CustomPainter {
       ..style = PaintingStyle.fill
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
 
+    final occlusionActive = occlusionRadius > 0;
+
+    // saveLayer is only used when occlusion is actually requested — for
+    // the default (non-occluded) pill usage this is a no-op path, same
+    // cost as before.
+    if (occlusionActive) {
+      canvas.saveLayer(Offset.zero & size, Paint());
+    }
+
     for (int i = 0; i < barHeights.length; i++) {
       final x = i * (barWidth + barGap);
       final barHeight = barHeights[i];
       // Center vertically
       final y = (maxBarHeight - barHeight) / 2;
 
-      // Glow behind bar (wider, dimmer)
+      // Bars are always drawn at full opacity here — the circular
+      // occlusion is applied afterward as a single compositing pass
+      // over the whole layer, not per bar, so it respects the globe's
+      // actual round shape (both x and y) instead of a horizontal band.
       glowPaint.color = glowColor;
       final glowRect = RRect.fromRectAndRadius(
         Rect.fromLTWH(x - 1, y - 1, barWidth + 2, barHeight + 2),
@@ -386,12 +503,42 @@ class _WaveFormPainter extends CustomPainter {
       );
       canvas.drawRRect(barRect, paint);
     }
+
+    if (occlusionActive) {
+      // Punch a soft circular hole through everything drawn above using
+      // a radial-gradient erase (BlendMode.dstOut): fully erases inside
+      // (occlusionRadius - occlusionFeather), fades to no erase by
+      // (occlusionRadius + occlusionFeather). Center is the real globe
+      // center for this canvas (occlusionCenterX horizontally, the
+      // painter's own vertical middle — which is where the globe is
+      // actually aligned in the Stack), and the radius comes straight
+      // from the caller's real globe size, so this tracks true layout
+      // geometry rather than an assumed coordinate.
+      final center = Offset(occlusionCenterX, size.height / 2);
+      final outerRadius = occlusionRadius + occlusionFeather;
+      final innerFraction =
+          ((occlusionRadius - occlusionFeather).clamp(0.0, outerRadius)) /
+              outerRadius;
+
+      final erasePaint = Paint()
+        ..blendMode = BlendMode.dstOut
+        ..shader = RadialGradient(
+          colors: const [Colors.white, Colors.white, Colors.transparent],
+          stops: [0.0, innerFraction, 1.0],
+        ).createShader(Rect.fromCircle(center: center, radius: outerRadius));
+
+      canvas.drawCircle(center, outerRadius, erasePaint);
+      canvas.restore();
+    }
   }
 
   @override
   bool shouldRepaint(covariant _WaveFormPainter oldDelegate) {
     return oldDelegate.barHeights != barHeights ||
         oldDelegate.barColor != barColor ||
-        oldDelegate.glowColor != glowColor;
+        oldDelegate.glowColor != glowColor ||
+        oldDelegate.occlusionCenterX != occlusionCenterX ||
+        oldDelegate.occlusionRadius != occlusionRadius ||
+        oldDelegate.occlusionFeather != occlusionFeather;
   }
 }
