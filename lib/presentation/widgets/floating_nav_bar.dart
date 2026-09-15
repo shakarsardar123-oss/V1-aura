@@ -25,7 +25,7 @@ class FloatingNavBar extends ConsumerWidget {
 
     final items = [
       _NavItem(
-        icon: Icons.wave_rounded,
+        icon: Icons.graphic_eq_rounded,
         label: l10n.navHome,
         index: 0,
       ),

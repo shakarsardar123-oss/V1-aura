@@ -98,7 +98,7 @@ class VoiceScreen extends ConsumerWidget {
 
     // Smart Greeting — from greeting_provider
     final greetingAsync = ref.watch(smartGreetingProvider);
-    final greetingText = greetingAsync.whenOrDefault(
+    final greetingText = greetingAsync.maybeWhen(
       data: (key) => resolveGreetingKey(key),
       orElse: () => 'سڵاو',
     );
