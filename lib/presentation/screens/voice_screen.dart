@@ -39,6 +39,13 @@ import '../widgets/widgets.dart';
 class VoiceScreen extends ConsumerWidget {
   const VoiceScreen({super.key});
 
+  // Controller kept as a static-lifetime singleton on the widget instance
+  // scope (rebuilt with the screen, not with every frame) so the future
+  // agent/command pipeline has a stable object to call
+  // rotateToLocation/showLocation/showImageOverlay/clearOverlay on.
+  static final HolographicGlobeController _globeController =
+      HolographicGlobeController();
+
   /// Toggle Live Mode from voice screen.
   Future<void> _toggleLiveMode(BuildContext context, WidgetRef ref) async {
     final isLive = ref.read(isLiveSessionProvider);
@@ -180,15 +187,46 @@ class VoiceScreen extends ConsumerWidget {
 
                 const Spacer(flex: 3),
 
-                // ── Central Wave Form in floating pill ──
-                AuraWaveForm(
-                  state: waveFormState,
-                  barCount: 32,
-                  barWidth: 3.0,
-                  barGap: 2.5,
-                  maxBarHeight: 80.0,
-                  showPill: true,
-                ),
+                // ── Central visualization: wave form + globe as ONE
+                // composition. The waveform runs full-bleed edge to edge;
+                // `occlusionRadius` is derived directly from `globeSize`
+                // (the same value the globe itself uses) so the bars
+                // smoothly fade out exactly where the globe actually is,
+                // not at some hardcoded screen coordinate. `centerGap`
+                // adds a gentle amplitude taper on top so the shape
+                // narrows before it reaches the globe rather than
+                // staying full-height right up to the fade boundary.
+                Builder(builder: (context) {
+                  const double globeSize = 168.0;
+                  return SizedBox(
+                    height: 190,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Positioned.fill(
+                          child: Center(
+                            child: AuraWaveForm(
+                              state: waveFormState,
+                              barCount: 56,
+                              barGap: 2.5,
+                              maxBarHeight: 90.0,
+                              minBarHeight: 3.0,
+                              fullBleed: true,
+                              centerGap: 0.3,
+                              occlusionRadius: globeSize / 2 + 4,
+                              occlusionFeather: 34,
+                            ),
+                          ),
+                        ),
+                        HolographicGlobe(
+                          state: waveFormState,
+                          controller: _globeController,
+                          size: globeSize,
+                        ),
+                      ],
+                    ),
+                  );
+                }),
 
                 const SizedBox(height: 32),
 
